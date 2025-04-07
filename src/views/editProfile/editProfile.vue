@@ -28,31 +28,7 @@
         }}</span>
       </div>
 
-      <p class="hintText">* Password o‘zgaradi faqat kiritilgan bo‘lsa</p>
-
-      <div class="form-group">
-        <label for="profilePicture">Profile Photo</label>
-        <div class="image-upload-wrapper">
-          <div class="avatar-group">
-            <div v-if="currentPhoto">
-              <label>Current Photo</label>
-              <img :src="currentPhoto" class="image-preview" />
-            </div>
-            <div v-if="imagePreview">
-              <label>New Photo</label>
-              <img :src="imagePreview" class="image-preview" />
-            </div>
-          </div>
-
-          <input
-            type="file"
-            id="profilePicture"
-            @change="onFileChange"
-            accept="image/*"
-          />
-        </div>
-        <span class="error-message" v-if="fileError">{{ fileError }}</span>
-      </div>
+      <p class="hintText">* Password o'zgaradi faqat kiritilgan bo'lsa</p>
 
       <button type="submit" :disabled="loading">
         <span v-if="loading">Saving...</span>
@@ -64,9 +40,8 @@
 
 <script>
 import { getAuth, updatePassword, updateProfile } from 'firebase/auth';
-import { doc, updateDoc, getDoc } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, storage } from '../../config/firebase.js';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { db } from '../../config/firebase.js';
 
 export default {
   data() {
@@ -74,15 +49,10 @@ export default {
       profile: {
         username: '',
         password: '',
-        profilePicture: null,
       },
       showPassword: false,
       loading: false,
       passwordError: '',
-      fileError: '',
-      imagePreview: null,
-      currentPhoto: null,
-      maxFileSize: 5 * 1024 * 1024, // 5MB
     };
   },
   async mounted() {
@@ -95,7 +65,6 @@ export default {
         if (docSnap.exists()) {
           const data = docSnap.data();
           this.profile.username = data.username || '';
-          this.currentPhoto = data.photoURL || null;
         }
       }
     } catch (error) {
@@ -113,34 +82,9 @@ export default {
         this.passwordError = '';
       }
     },
-    onFileChange(event) {
-      const file = event.target.files[0];
-      if (file) {
-        if (file.size > this.maxFileSize) {
-          this.fileError = 'File size should not exceed 5MB';
-          event.target.value = '';
-          return;
-        }
-        if (!file.type.includes('image/')) {
-          this.fileError = 'Please upload an image file';
-          event.target.value = '';
-          return;
-        }
-        this.fileError = '';
-        this.profile.profilePicture = file;
-        this.createImagePreview(file);
-      }
-    },
-    createImagePreview(file) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        this.imagePreview = e.target.result;
-      };
-      reader.readAsDataURL(file);
-    },
     async saveProfile() {
       if (this.loading) return;
-      if (this.passwordError || this.fileError) return;
+      if (this.passwordError) return;
 
       this.loading = true;
       try {
@@ -152,24 +96,16 @@ export default {
           return;
         }
 
-        let photoURL = user.photoURL;
-
-        if (this.profile.profilePicture) {
-          const imageRef = ref(storage, `profilePics/${user.uid}`);
-          await uploadBytes(imageRef, this.profile.profilePicture);
-          photoURL = await getDownloadURL(imageRef);
-        }
-
-        // Update Firestore
-        await updateDoc(doc(db, 'users', user.uid), {
+        // Use setDoc with merge: true instead of updateDoc
+        // This will create the document if it doesn't exist
+        await setDoc(doc(db, 'users', user.uid), {
           username: this.profile.username,
-          photoURL,
-        });
+          updatedAt: new Date()
+        }, { merge: true });
 
         // Update Firebase Auth Profile
         await updateProfile(user, {
           displayName: this.profile.username,
-          photoURL,
         });
 
         if (this.profile.password) {
@@ -258,7 +194,7 @@ button:disabled {
 
 .password-wrapper input {
   width: 100%;
-  padding-right: 2.5rem; /* O‘ng tomonda ikonka uchun joy */
+  padding-right: 2.5rem; /* O'ng tomonda ikonka uchun joy */
 }
 
 #toggle-password-icon {
@@ -292,43 +228,9 @@ button:disabled {
   margin-top: 0.25rem;
 }
 
-.image-upload-wrapper {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.avatar-group {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  flex-wrap: wrap;
-}
-
-.avatar-group label {
-  font-size: 0.8rem;
-  margin-bottom: 0.3rem;
-  display: block;
-  color: #666;
-}
-
-.image-preview {
-  width: 120px;
-  height: 120px;
-  border-radius: 50%;
-  object-fit: cover;
-  box-shadow: 0 0 8px rgba(0, 0, 0, 0.1);
-  border: 2px solid #007bff;
-}
-
 @media (max-width: 500px) {
   .edit-profile {
     padding: 1rem;
-  }
-
-  .image-preview {
-    width: 80px;
-    height: 80px;
   }
 
   button {
