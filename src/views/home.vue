@@ -1,6 +1,13 @@
 <template>
   <div class="test-selection">
     <h1>Testni Tanlang</h1>
+    
+    <!-- Xatolik xabari -->
+    <div v-if="error" class="error-message">
+      <p>{{ error }}</p>
+      <button @click="retryLastAction" class="retry-button">Qayta urinish</button>
+    </div>
+    
     <div class="selections">
       <!-- Fan tanlash -->
       <div class="selection-group">
@@ -8,27 +15,12 @@
         <select
           id="subject"
           v-model="selectedFan"
-          @change="getTest"
+          @change="getDarajalar"
           :class="{ error: submitted && !selectedFan }"
         >
           <option value="" disabled>Fanlarni Tanlang</option>
           <option v-for="fan in Fanlar" :key="fan.id" :value="fan">
             {{ fan.id }}
-          </option>
-        </select>
-      </div>
-
-      <!-- Test soni -->
-      <div class="selection-group">
-        <label for="quantity">Test Soni</label>
-        <select
-          id="quantity"
-          v-model="selectedQuantity"
-          :class="{ error: submitted && !selectedQuantity }"
-        >
-          <option value="" disabled>Test sonini tanlang</option>
-          <option v-for="number in TestNumber" :key="number" :value="number">
-            {{ number }}
           </option>
         </select>
       </div>
@@ -40,6 +32,7 @@
           id="level"
           v-model="selectedDaraja"
           :class="{ error: submitted && !selectedDaraja }"
+          :disabled="!selectedFan"
         >
           <option value="" disabled>Darajangizni tanlang</option>
           <option v-for="daraja in darajalar" :key="daraja" :value="daraja">
@@ -47,11 +40,27 @@
           </option>
         </select>
       </div>
+
+      <!-- Test soni -->
+      <div class="selection-group">
+        <label for="quantity">Test Soni</label>
+        <select
+          id="quantity"
+          v-model="selectedQuantity"
+          :class="{ error: submitted && !selectedQuantity }"
+          :disabled="!selectedDaraja"
+        >
+          <option value="" disabled>Test sonini tanlang</option>
+          <option v-for="number in TestNumber" :key="number" :value="number">
+            {{ number }}
+          </option>
+        </select>
+      </div>
     </div>
 
     <!-- Start Button -->
     <div class="select-start">
-      <button class="start-button" @click="startTest" :disabled="isLoading">
+      <button class="start-button" @click="startTest" :disabled="isLoading || !canStartTest">
         <span v-if="!isLoading">Testni Boshlash</span>
         <span v-else class="loader"></span>
       </button>
@@ -61,7 +70,7 @@
 
 <script>
 import { db } from '../config/firebase';
-import { collection, doc, getDocs } from 'firebase/firestore';
+import { collection, doc, getDocs, query, limit } from 'firebase/firestore';
 
 export default {
   data() {
@@ -74,47 +83,115 @@ export default {
       selectedQuantity: '',
       isLoading: false,
       submitted: false,
+      tests: [],
+      error: null,
+      lastAction: null
     };
+  },
+  computed: {
+    canStartTest() {
+      return this.selectedFan && this.selectedDaraja && this.selectedQuantity;
+    }
   },
   methods: {
     async fetchFanlar() {
       try {
+        this.isLoading = true;
+        this.error = null;
+        this.lastAction = 'fetchFanlar';
+        
         const querySnapshot = await getDocs(collection(db, 'subjects'));
         this.Fanlar = querySnapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data(),
         }));
+        
+        this.isLoading = false;
       } catch (error) {
-        console.error('Xatolik:', error);
+        console.error('Xatolik Fanlarni yuklashda:', error);
+        this.error = `Fanlarni yuklashda xatolik: ${error.message}`;
+        this.isLoading = false;
       }
     },
-    async getTest() {
+    async getDarajalar() {
       try {
         if (!this.selectedFan) return;
 
+        this.isLoading = true;
+        this.error = null;
+        this.lastAction = 'getDarajalar';
+        
         this.darajalar = [];
+        this.selectedDaraja = '';
+        this.selectedQuantity = '';
+        
         const fanRef = doc(db, 'subjects', this.selectedFan.id);
         const collections = await getDocs(collection(fanRef, 'levels'));
         this.darajalar = collections.docs.map((doc) => doc.id);
+        
+        this.isLoading = false;
       } catch (error) {
-        console.error('Xatolik:', error);
+        console.error('Xatolik Darajalarni yuklashda:', error);
+        this.error = `Darajalarni yuklashda xatolik: ${error.message}`;
+        this.isLoading = false;
       }
     },
-    startTest() {
+    async fetchTests() {
+      try {
+        this.isLoading = true;
+        this.error = null;
+        this.lastAction = 'fetchTests';
+        
+        const fanRef = doc(db, 'subjects', this.selectedFan.id);
+        const levelRef = doc(fanRef, 'levels', this.selectedDaraja);
+        
+        // Testlar kolleksiyasidan ma'lumotlarni olish
+        const testsQuery = query(
+          collection(levelRef, 'tests'), 
+          limit(parseInt(this.selectedQuantity))
+        );
+        
+        const testsSnapshot = await getDocs(testsQuery);
+        
+        if (testsSnapshot.empty) {
+          this.error = 'Bu daraja uchun testlar topilmadi!';
+          this.isLoading = false;
+          return false;
+        }
+        
+        this.tests = testsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        
+        this.isLoading = false;
+        return true;
+      } catch (error) {
+        console.error('Xatolik Testlarni yuklashda:', error);
+        this.error = `Testlarni yuklashda xatolik: ${error.message}`;
+        this.isLoading = false;
+        return false;
+      }
+    },
+    async startTest() {
       this.submitted = true;
 
-      if (!this.selectedFan || !this.selectedQuantity || !this.selectedDaraja) {
+      if (!this.canStartTest) {
         return;
       }
 
-      this.isLoading = true;
+      const testsLoaded = await this.fetchTests();
+      
+      if (!testsLoaded) {
+        return;
+      }
 
       // Test ma'lumotlarini tayyorlash
-      // Bu yerda test ma'lumotlarini tayyorlash va saqlash jarayonini qo'shishingiz mumkin
       const testData = {
         fan: this.selectedFan.id,
         testSoni: this.selectedQuantity,
         daraja: this.selectedDaraja,
+        testlar: this.tests
       };
 
       // Test sahifasiga o'tish
@@ -123,6 +200,15 @@ export default {
         params: { testData: JSON.stringify(testData) },
       });
     },
+    retryLastAction() {
+      if (this.lastAction === 'fetchFanlar') {
+        this.fetchFanlar();
+      } else if (this.lastAction === 'getDarajalar') {
+        this.getDarajalar();
+      } else if (this.lastAction === 'fetchTests') {
+        this.fetchTests();
+      }
+    }
   },
   mounted() {
     this.fetchFanlar();
@@ -140,6 +226,30 @@ h1 {
   text-align: center;
   color: #2c3e50;
   margin-bottom: 2rem;
+}
+
+.error-message {
+  padding: 1rem;
+  background-color: #ffebee;
+  border: 1px solid #ffcdd2;
+  border-radius: 8px;
+  margin-bottom: 1.5rem;
+  color: #c62828;
+}
+
+.retry-button {
+  margin-top: 0.5rem;
+  padding: 0.5rem 1rem;
+  background-color: #f44336;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.retry-button:hover {
+  background-color: #d32f2f;
 }
 
 .selections {
@@ -177,6 +287,11 @@ select:focus {
 
 select.error {
   border-color: #dc3545;
+}
+
+select:disabled {
+  background-color: #f5f5f5;
+  cursor: not-allowed;
 }
 
 .start-button {
